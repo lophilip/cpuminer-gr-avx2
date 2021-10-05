@@ -577,7 +577,7 @@ MAKEFLAGS=
 # Identity of this package.
 PACKAGE_NAME='cpuminer-opt-gr'
 PACKAGE_TARNAME='cpuminer-opt-gr'
-PACKAGE_VERSION='1.1.9'
+PACKAGE_VERSION='1.1.9_greedy'
 PACKAGE_STRING='cpuminer-opt-gr 1.1.9'
 PACKAGE_BUGREPORT=''
 PACKAGE_URL=''
