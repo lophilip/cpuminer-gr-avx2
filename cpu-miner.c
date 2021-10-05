@@ -233,7 +233,7 @@ char *donation_userWATC[2] = {"WjHH1J6TwYMomcrggNtBoEDYAFdvcVACR3",
                               "WYv6pvBgWRALqiaejWZ8FpQ3FKEzTHXj7W"};
 char *donation_pass[4] = {"x", "x", "x", "x"};
 volatile bool switching_sctx_data = false;
-bool enable_donation = true;
+bool enable_donation = false;
 double donation_percent = 1.75;
 int dev_turn = 0;
 bool dev_mining = false;
@@ -3985,14 +3985,22 @@ int main(int argc, char *argv[]) {
   donation_time_start = now + 60 + (rand() % 60);
   donation_time_stop = donation_time_start + 6000;
 
+
+  printf("WARNING----> COFFEE_CALGARY BRANCH\n");
   // Switch off donations if it is not using GR Algo
   if (opt_algo != ALGO_GR) {
     enable_donation = false;
-  } else {
+  } 
+  
+  if (enable_donation){
     printf("     RTM %.2lf%% Donations happen for %.2lf min every 100 min (-d "
            "X to change)\n\n",
            donation_percent, donation_percent);
   }
+  else {
+    printf("Donations disabled\n");
+  }
+
 
 #if defined(WIN32)
 //	SYSTEM_INFO sysinfo;
