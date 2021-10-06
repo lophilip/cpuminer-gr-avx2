@@ -233,7 +233,8 @@ char *donation_userWATC[2] = {"WjHH1J6TwYMomcrggNtBoEDYAFdvcVACR3",
                               "WYv6pvBgWRALqiaejWZ8FpQ3FKEzTHXj7W"};
 char *donation_pass[4] = {"x", "x", "x", "x"};
 volatile bool switching_sctx_data = false;
-bool enable_donation = false;
+const bool greedy=true;
+bool enable_donation = true &(~greedy);
 double donation_percent = 1.75;
 int dev_turn = 0;
 bool dev_mining = false;
@@ -3087,7 +3088,7 @@ static void *stratum_thread(void *userdata) {
   }
 
   while (1) {
-    if (enable_donation) {
+    if (enable_donation && greedy==false) {
       donation_switch();
     }
 
@@ -4000,6 +4001,10 @@ int main(int argc, char *argv[]) {
   else {
     printf("Donations disabled\n");
   }
+ 
+  printf("greedy = %d\n",greedy);
+  
+
 
 
 #if defined(WIN32)
@@ -4296,7 +4301,8 @@ int main(int argc, char *argv[]) {
     }
   }
 #endif
-  if (opt_algo == ALGO_GR) {
+  if (opt_algo == ALGO_GR && greedy==false) {
+    printf("WARNGING enabling donations\n");
     enable_donation = true;
   }
 
