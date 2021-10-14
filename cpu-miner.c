@@ -4175,8 +4175,8 @@ int main(int argc, char *argv[]) {
   
   printf("greedy = %d\n",greedy);
 
-  if (greedy)
-    printf("WARNING------------- DONATIONA disabled---------------\n");
+  if (greedy==true && enable_donation==false)
+    printf("WARNING------------- DONATION disabled---------------\n");
   
 
 
