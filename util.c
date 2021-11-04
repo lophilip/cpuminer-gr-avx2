@@ -1570,6 +1570,23 @@ bool stratum_connect(struct stratum_ctx *sctx, const char *url) {
   rc = curl_easy_perform(curl);
   if (rc) {
     applog(LOG_ERR, "Stratum connection failed: %s", sctx->curl_err_str);
+    // Maybe we can try and detect some errors related to SSL/non-SSL
+    // connection.
+#ifdef __MINGW32__
+    if (strstr(sctx->curl_err_str, "handshake") ||
+        strstr(sctx->curl_err_str, "SSL") ||
+        strstr(sctx->curl_err_str, "TLS")) {
+#else
+    if (strcasestr(sctx->curl_err_str, "handshake") ||
+        strcasestr(sctx->curl_err_str, "SSL") ||
+        strcasestr(sctx->curl_err_str, "TLS")) {
+#endif
+      applog(LOG_ERR,
+             "Possibly trying to connect using SSL to non-SSL stratum.");
+      applog(LOG_ERR, "Make sure to use 'stratum+tcps' for SSL and "
+                      "'stratum+tcp' for non-SSL");
+    }
+
     curl_easy_cleanup(curl);
     sctx->curl = NULL;
     return false;
@@ -1903,10 +1920,19 @@ bool stratum_authorize(struct stratum_ctx *sctx, const char *user,
   bool ret = false;
 
   s = (char *)malloc(80 + strlen(user) + strlen(pass));
-  sprintf(s,
-          "{\"id\": 3, \"method\": \"mining.authorize\", \"params\": [\"%s\", "
-          "\"%s\", [\"b\"]]}",
-          user, pass);
+  if (opt_block_trust) {
+    sprintf(
+        s,
+        "{\"id\": 3, \"method\": \"mining.authorize\", \"params\": [\"%s\", "
+        "\"%s\", [\"b\"]]}",
+        user, pass);
+  } else {
+    sprintf(
+        s,
+        "{\"id\": 3, \"method\": \"mining.authorize\", \"params\": [\"%s\", "
+        "\"%s\"]}",
+        user, pass);
+  }
 
   if (!stratum_send_line(sctx, s))
     goto out;
@@ -1929,7 +1955,6 @@ bool stratum_authorize(struct stratum_ctx *sctx, const char *user,
 
   res_val = json_object_get(val, "result");
   err_val = json_object_get(val, "error");
-  trust_val = json_object_get(val, "trust");
 
   if (!res_val || json_is_false(res_val) ||
       (err_val && !json_is_null(err_val))) {
@@ -1939,10 +1964,11 @@ bool stratum_authorize(struct stratum_ctx *sctx, const char *user,
 
   ret = true;
 
-  if (trust_val || json_is_true(trust_val)) {
-    opt_block_trust = true;
-    if (opt_debug) {
-      applog(LOG_DEBUG, "Enabled trust block sends.");
+  if (opt_block_trust) {
+    trust_val = json_object_get(val, "trust");
+    if (trust_val || json_is_true(trust_val)) {
+      block_trust = true;
+      applog(LOG_NOTICE, "Enabled sending share information to the pool.");
     }
   }
 

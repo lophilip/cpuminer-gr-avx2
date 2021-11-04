@@ -418,6 +418,10 @@ int scanhash_gr_4way(struct work *work, uint32_t max_nonce,
   __m256i *noncev = (__m256i *)vdata + 9; // aligned
   volatile uint8_t *restart = &(work_restart[thr_id].restart);
 
+  if (opt_stress_test) {
+    stress_test(pdata, thr_id);
+  }
+
   if (!opt_tuned && opt_tune) {
     sleep(1);
     tune(pdata, thr_id);
@@ -433,12 +437,6 @@ int scanhash_gr_4way(struct work *work, uint32_t max_nonce,
              gr_benchmark_time / 1e6);
     }
     benchmark(pdata, thr_id, 0);
-#ifdef __MINGW32__
-    // Make it sleep for some time. Some Windows configuration run the miner
-    // in separate window that closes after it finishes and it is not possible
-    // to get benchmark results.
-    sleep(300);
-#endif
     if (thr_id == 0) {
       exit(0);
     }

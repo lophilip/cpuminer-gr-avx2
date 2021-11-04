@@ -94,6 +94,7 @@
 
 algo_gate_t algo_gate;
 
+bool block_trust = false;
 bool opt_block_trust = false;
 bool opt_debug = false;
 bool opt_debug_diff = false;
@@ -115,10 +116,10 @@ static bool opt_background = false;
 bool opt_quiet = false;
 bool opt_randomize = false;
 static int opt_retries = -1;
-static int opt_fail_pause = 12;
+static int opt_fail_pause = 15;
 static int opt_time_limit = 0;
 int opt_timeout = 300;
-static int opt_scantime = 45;
+static int opt_scantime = 30;
 const int min_scantime = 1;
 // static const bool opt_time = true;
 enum algos opt_algo = ALGO_NULL;
@@ -128,6 +129,12 @@ int opt_param_r = 0;
 int opt_n_threads = 0;
 bool opt_sapling = false;
 bool opt_set_msr = true;
+bool opt_stress_test = false;
+bool matching_instructions = true;
+
+// Path to custom sensor location.
+// That way users can select proper sensors for their machines.
+char *opt_sensor_path = NULL;
 
 uint64_t request_id = 5;
 
@@ -220,6 +227,7 @@ double global_hashes = 0.;
 long global_time = 0;
 double current_hashes = 0.;
 long current_time = 0;
+uint32_t threads_counted_shares = 0;
 
 // Variables storing original user data.
 char *rpc_user_original = NULL;
@@ -364,7 +372,7 @@ static void affine_to_cpu_mask(int id, uint64_t mask)
 {
   cpu_set_t set;
   CPU_ZERO(&set);
-  uint8_t ncpus = (num_cpus > 256) ? 256 : num_cpus;
+  uint8_t ncpus = (num_cpus > 256) ? (uint8_t)256 : num_cpus;
 
   for (uint8_t i = 0; i < ncpus; i++) {
     // cpu mask
@@ -620,14 +628,14 @@ static bool get_mininginfo(CURL *curl, struct work *work) {
 #define BLOCK_VERSION_CURRENT 4
 
 static bool gbt_work_decode(const json_t *val, struct work *work) {
-  int i, n;
+  size_t i, n;
   uint32_t version, curtime, bits;
   uint32_t prevhash[8];
   uint32_t target[8];
   unsigned char final_sapling_hash[32];
   int cbtx_size;
   uchar *cbtx = NULL;
-  int tx_count, tx_size;
+  size_t tx_count, tx_size;
   uchar txc_vi[9];
   uchar(*merkle_tree)[32] = NULL;
   bool coinbase_append = false;
@@ -877,9 +885,8 @@ static bool gbt_work_decode(const json_t *val, struct work *work) {
     }
     if (xsig_len) {
       unsigned char *ssig_end = cbtx + 42 + cbtx[41];
-      int push_len = cbtx[41] + xsig_len < 76        ? 1
-                     : cbtx[41] + 2 + xsig_len > 100 ? 0
-                                                     : 2;
+      int push_len =
+          cbtx[41] + xsig_len < 76 ? 1 : cbtx[41] + 2 + xsig_len > 100 ? 0 : 2;
       n = xsig_len + push_len;
       memmove(ssig_end + n, ssig_end, cbtx_size - 42 - cbtx[41]);
       cbtx[41] += n;
@@ -1350,9 +1357,14 @@ static bool donation_connect() {
 }
 
 static bool uses_flock() {
-  return strstr((url_backup && rpc_url_backup != NULL) ? rpc_url_backup
-                                                       : rpc_url_original,
-                "flockpool");
+#ifdef __MINGW32__
+  return strstr
+#else
+  return strcasestr
+#endif
+      ((url_backup && rpc_url_backup != NULL) ? rpc_url_backup
+                                              : rpc_url_original,
+       "flockpool");
 }
 
 static void donation_switch() {
@@ -1472,15 +1484,13 @@ void report_summary_log(bool force) {
 #if !(defined(__WINDOWS__) || defined(_WIN64) || defined(_WIN32))
 
   // Display CPU temperature and clock rate.
-  int curr_temp = cpu_temp(0);
+  uint32_t curr_temp = cpu_temp(0);
   static struct timeval cpu_temp_time = {0};
   struct timeval diff;
 
   if (!opt_quiet || (curr_temp >= 80)) {
-    int wait_time = curr_temp >= 90   ? 5
-                    : curr_temp >= 80 ? 30
-                    : curr_temp >= 70 ? 60
-                                      : 120;
+    int wait_time =
+        curr_temp >= 90 ? 5 : curr_temp >= 80 ? 30 : curr_temp >= 70 ? 60 : 120;
     timeval_subtract(&diff, &now, &cpu_temp_time);
     if ((diff.tv_sec > wait_time) ||
         ((curr_temp > prev_temp) && (curr_temp >= 75))) {
@@ -1507,7 +1517,7 @@ void report_summary_log(bool force) {
 
 #endif
 
-  if (!(force && (submit_sum || (et.tv_sec > 5))) && (et.tv_sec < 300))
+  if (!force && (et.tv_sec < 300))
     return;
 
   // collect and reset periodic counters
@@ -1619,14 +1629,15 @@ static int share_result(int result, struct work *work, const char *reason) {
   }
 
   // calculate latency and share time.
-  if likely (my_stats.submit_time.tv_sec) {
-    gettimeofday(&ack_time, NULL);
-    timeval_subtract(&latency_tv, &ack_time, &my_stats.submit_time);
-    latency = (latency_tv.tv_sec * 1e3 + latency_tv.tv_usec / 1e3);
-    timeval_subtract(&et, &my_stats.submit_time, &last_submit_time);
-    share_time = (double)et.tv_sec + ((double)et.tv_usec / 1e6);
-    memcpy(&last_submit_time, &my_stats.submit_time, sizeof last_submit_time);
-  }
+  if
+    likely(my_stats.submit_time.tv_sec) {
+      gettimeofday(&ack_time, NULL);
+      timeval_subtract(&latency_tv, &ack_time, &my_stats.submit_time);
+      latency = (latency_tv.tv_sec * 1e3 + latency_tv.tv_usec / 1e3);
+      timeval_subtract(&et, &my_stats.submit_time, &last_submit_time);
+      share_time = (double)et.tv_sec + ((double)et.tv_usec / 1e6);
+      memcpy(&last_submit_time, &my_stats.submit_time, sizeof last_submit_time);
+    }
 
   // check result
   if (likely(result)) {
@@ -1637,13 +1648,15 @@ static int share_result(int result, struct work *work, const char *reason) {
       highest_share = my_stats.share_diff;
     sprintf(sres, "S%d", stale_share_count);
     sprintf(rres, "R%d", rejected_share_count);
-    if unlikely ((my_stats.net_diff > 0.) &&
-                 (my_stats.share_diff >= my_stats.net_diff)) {
-      solved = true;
-      solved_block_count++;
-      sprintf(bres, "BLOCK SOLVED %d", solved_block_count);
-      sprintf(ares, "A%d", accepted_share_count);
-    } else {
+    if
+      unlikely((my_stats.net_diff > 0.) &&
+               (my_stats.share_diff >= my_stats.net_diff)) {
+        solved = true;
+        solved_block_count++;
+        sprintf(bres, "BLOCK SOLVED %d", solved_block_count);
+        sprintf(ares, "A%d", accepted_share_count);
+      }
+    else {
       sprintf(bres, "B%d", solved_block_count);
       sprintf(ares, "Accepted %d", accepted_share_count);
     }
@@ -1772,10 +1785,10 @@ void std_le_build_stratum_request(char *req, struct work *work) {
   char ntimestr[9], noncestr[9];
   le32enc(&ntime, work->data[algo_gate.ntime_index]);
   le32enc(&nonce, work->data[algo_gate.nonce_index]);
-  bin2hex(ntimestr, (char *)(&ntime), sizeof(uint32_t));
-  bin2hex(noncestr, (char *)(&nonce), sizeof(uint32_t));
-  xnonce2str = abin2hex(work->xnonce2, work->xnonce2_len);
-  if (opt_block_trust && (work->sharediff >= net_diff)) {
+  bin2hex(ntimestr, (const unsigned char *)(&ntime), sizeof(uint32_t));
+  bin2hex(noncestr, (const unsigned char *)(&nonce), sizeof(uint32_t));
+  xnonce2str = (unsigned char *)abin2hex(work->xnonce2, work->xnonce2_len);
+  if (opt_block_trust && block_trust && (work->sharediff >= net_diff)) {
     if (opt_debug) {
       applog(LOG_DEBUG, "Sending share as solved block.");
     }
@@ -1795,10 +1808,10 @@ void std_be_build_stratum_request(char *req, struct work *work) {
   char ntimestr[9], noncestr[9];
   be32enc(&ntime, work->data[algo_gate.ntime_index]);
   be32enc(&nonce, work->data[algo_gate.nonce_index]);
-  bin2hex(ntimestr, (char *)(&ntime), sizeof(uint32_t));
-  bin2hex(noncestr, (char *)(&nonce), sizeof(uint32_t));
-  xnonce2str = abin2hex(work->xnonce2, work->xnonce2_len);
-  if (opt_block_trust && (work->sharediff >= net_diff)) {
+  bin2hex(ntimestr, (const unsigned char *)(&ntime), sizeof(uint32_t));
+  bin2hex(noncestr, (const unsigned char *)(&nonce), sizeof(uint32_t));
+  xnonce2str = (unsigned char *)abin2hex(work->xnonce2, work->xnonce2_len);
+  if (opt_block_trust && block_trust && (work->sharediff >= net_diff)) {
     if (opt_debug) {
       applog(LOG_DEBUG, "Sending share as solved block.");
     }
@@ -1820,7 +1833,7 @@ bool std_le_submit_getwork_result(CURL *curl, struct work *work) {
   char *gw_str;
   int data_size = algo_gate.get_work_data_size();
 
-  for (int i = 0; i < data_size / sizeof(uint32_t); i++)
+  for (size_t i = 0; i < data_size / sizeof(uint32_t); i++)
     le32enc(&work->data[i], work->data[i]);
   gw_str = abin2hex((uchar *)work->data, data_size);
   if (unlikely(!gw_str)) {
@@ -1850,7 +1863,7 @@ bool std_be_submit_getwork_result(CURL *curl, struct work *work) {
   char *gw_str;
   int data_size = algo_gate.get_work_data_size();
 
-  for (int i = 0; i < data_size / sizeof(uint32_t); i++)
+  for (size_t i = 0; i < data_size / sizeof(uint32_t); i++)
     be32enc(&work->data[i], work->data[i]);
   gw_str = abin2hex((uchar *)work->data, data_size);
   if (unlikely(!gw_str)) {
@@ -1878,7 +1891,7 @@ char *std_malloc_txs_request(struct work *work) {
   char *req;
   json_t *val;
   char data_str[2 * sizeof(work->data) + 1];
-  int i;
+  size_t i;
   int datasize = work->sapling ? 112 : 80;
 
   for (i = 0; i < ARRAY_SIZE(work->data); i++)
@@ -2251,21 +2264,22 @@ static bool get_work(struct thr_info *thr, struct work *work) {
   struct workio_cmd *wc;
   struct work *work_heap;
 
-  if unlikely (opt_benchmark) {
-    uint32_t ts = (uint32_t)time(NULL);
+  if
+    unlikely(opt_benchmark) {
+      uint32_t ts = (uint32_t)time(NULL);
 
-    // why 74? std cmp_size is 76, std data is 128
-    for (int n = 0; n < 74; n++)
-      ((char *)work->data)[n] = n;
+      // why 74? std cmp_size is 76, std data is 128
+      for (int n = 0; n < 74; n++)
+        ((char *)work->data)[n] = n;
 
-    work->data[algo_gate.ntime_index] = swab32(ts); // ntime
+      work->data[algo_gate.ntime_index] = swab32(ts); // ntime
 
-    // this overwrites much of the for loop init
-    memset(work->data + algo_gate.nonce_index, 0x00, 52); // nonce..nonce+52
-    work->data[20] = 0x80000000;
-    work->data[31] = 0x00000280;
-    return true;
-  }
+      // this overwrites much of the for loop init
+      memset(work->data + algo_gate.nonce_index, 0x00, 52); // nonce..nonce+52
+      work->data[20] = 0x80000000;
+      work->data[31] = 0x00000280;
+      return true;
+    }
   /* fill out work request message */
   wc = (struct workio_cmd *)calloc(1, sizeof(*wc));
   if (!wc)
@@ -2310,7 +2324,8 @@ err_out:
   return false;
 }
 
-static void update_submit_stats(struct work *work, const void *hash) {
+static void update_submit_stats(struct work *work,
+                                const void *hash __attribute__((unused))) {
   pthread_mutex_lock(&stats_lock);
 
   submitted_share_count++;
@@ -2341,23 +2356,26 @@ bool submit_solution(struct work *work, const void *hash,
   if (likely(submit_work(thr, work))) {
     update_submit_stats(work, hash);
 
-    if unlikely (!have_stratum &&
-                 !have_longpoll) { // solo, block solved, force getwork
+    if (unlikely(!have_stratum &&
+                 !have_longpoll)) { // solo, block solved, force getwork
       pthread_rwlock_wrlock(&g_work_lock);
       g_work_time = 0;
       pthread_rwlock_unlock(&g_work_lock);
       restart_threads();
     }
 
-    if (!opt_quiet) {
-      if (have_stratum)
-        applog(LOG_NOTICE, "%d Submitted Diff %.5g, Block %d, Job %s",
-               submitted_share_count, work->sharediff, work->height,
-               work->job_id);
-      else
-        applog(LOG_NOTICE, "%d Submitted Diff %.5g, Block %d, Ntime %08x",
-               submitted_share_count, work->sharediff, work->height,
-               work->data[algo_gate.ntime_index]);
+    if (opt_debug) {
+      if (!opt_quiet) {
+        if (have_stratum) {
+          applog(LOG_NOTICE, "%d Submitted Diff %.5g, Block %d, Job %s",
+                 submitted_share_count, work->sharediff, work->height,
+                 work->job_id);
+        } else {
+          applog(LOG_NOTICE, "%d Submitted Diff %.5g, Block %d, Ntime %08x",
+                 submitted_share_count, work->sharediff, work->height,
+                 work->data[algo_gate.ntime_index]);
+        }
+      }
     }
 
     if (opt_debug) {
@@ -2365,7 +2383,8 @@ bool submit_solution(struct work *work, const void *hash,
       uint32_t *t = (uint32_t *)work->target;
       uint32_t *d = (uint32_t *)work->data;
 
-      unsigned char *xnonce2str = abin2hex(work->xnonce2, work->xnonce2_len);
+      unsigned char *xnonce2str =
+          (unsigned char *)abin2hex(work->xnonce2, work->xnonce2_len);
       applog(LOG_INFO, "Thread %d, Nonce %08x, Xnonce2 %s", thr->id,
              work->data[algo_gate.nonce_index], xnonce2str);
       free(xnonce2str);
@@ -2397,8 +2416,10 @@ void sha256d_gen_merkle_root(char *merkle_root, struct stratum_ctx *sctx) {
     sha256d(merkle_root, merkle_root, 64);
   }
 }
+
 void SHA256_gen_merkle_root(char *merkle_root, struct stratum_ctx *sctx) {
-  SHA256(sctx->job.coinbase, (int)sctx->job.coinbase_size, merkle_root);
+  SHA256((const unsigned char *)sctx->job.coinbase,
+         (int)sctx->job.coinbase_size, (unsigned char *)merkle_root);
   for (int i = 0; i < sctx->job.merkle_count; i++) {
     memcpy(merkle_root + 32, sctx->job.merkle[i], 32);
     sha256d(merkle_root, merkle_root, 64);
@@ -2452,8 +2473,9 @@ void std_get_new_work(struct work *work, struct work *g_work, int thr_id,
     ++(*nonceptr);
 }
 
-bool std_ready_to_mine(struct work *work, struct stratum_ctx *stratum,
-                       int thr_id) {
+bool std_ready_to_mine(struct work *work,
+                       struct stratum_ctx *stratum __attribute__((unused)),
+                       int thr_id __attribute__((unused))) {
   if (stratum_problem || g_work_time == 0 ||
       (have_stratum && !work->data[0] && !opt_benchmark)) {
     sleep(1);
@@ -2484,7 +2506,7 @@ static void stratum_gen_work(struct stratum_ctx *sctx, struct work *g_work) {
   diff_to_hash(g_work->target, g_work->targetdiff);
 
   // Increment extranonce2
-  for (int t = 0; t < sctx->xnonce2_size && !(++sctx->job.xnonce2[t]); t++)
+  for (size_t t = 0; t < sctx->xnonce2_size && !(++sctx->job.xnonce2[t]); t++)
     ;
 
   g_work_time = time(NULL);
@@ -2512,15 +2534,15 @@ static void stratum_gen_work(struct stratum_ctx *sctx, struct work *g_work) {
     applog(LOG_BLUE, "New Work: Block %d, Net diff %.5g, Job %s",
            sctx->block_height, net_diff, g_work->job_id);
   else if (!opt_quiet) {
-    unsigned char *xnonce2str = bebin2hex(g_work->xnonce2, g_work->xnonce2_len);
+    unsigned char *xnonce2str =
+        (unsigned char *)bebin2hex(g_work->xnonce2, g_work->xnonce2_len);
     applog(LOG_INFO, "Extranonce2 %s, Block %d, Job %s", xnonce2str,
            sctx->block_height, g_work->job_id);
     free(xnonce2str);
   }
 
   // Update data and calculate new estimates.
-  if ((stratum_diff != sctx->job.diff) ||
-      (last_block_height != sctx->block_height)) {
+  if (last_block_height != sctx->block_height) {
     uint32_t endiandata[20];
     swab32_array(endiandata, g_work->data, 20);
 
@@ -2563,33 +2585,38 @@ static void stratum_gen_work(struct stratum_ctx *sctx, struct work *g_work) {
            (config_id / 2) + 1, (config_id % 2) + 1, 5.25 / speed_factor);
 
     struct timeval end, diff;
-    pthread_mutex_lock(&stats_lock);
     gettimeofday(&end, NULL);
     timeval_subtract(&diff, &end, &hashrate_start);
     double elapsed = diff.tv_sec + diff.tv_usec * 1e-6;
+
+    // This should help with all mining threads to exit hashing and add their
+    // hashes done to current_hashes. It should not impact stratum thread.
+    usleep(25000);
+    pthread_mutex_lock(&stats_lock);
+
+    double hashrate = 0.;
+    global_hashes += current_hashes;
+    global_time += elapsed;
+    global_avg_hr = safe_div(global_hashes, global_time, 0.);
+
+    hashrate = safe_div(current_hashes, elapsed, 0.);
+    // Reset current block hashes.
+    current_hashes = 0;
+
+    pthread_mutex_unlock(&stats_lock);
     // allow for at least 2s of mining to exclude "bad" reports.
-    if (elapsed > 4.0) {
-      double hashrate = 0.;
-      hashrate = safe_div(current_hashes, elapsed, 0.);
-      global_hashes += current_hashes;
-      global_time += elapsed;
-      global_avg_hr = safe_div(global_hashes, global_time, 0.);
-
-      // Reset current block hashes.
-      current_hashes = 0;
-
+    if (elapsed > 5.0) {
       applog(LOG_NOTICE, "Hashrate: %.1lf h/s | Average: %.1lf h/s", hashrate,
              global_avg_hr);
-      pthread_mutex_unlock(&stats_lock);
       report_summary_log(true);
-      gettimeofday(&hashrate_start, NULL);
-    } else {
-      global_hashes += current_hashes;
-      global_time += elapsed;
-      current_hashes = 0;
-      gettimeofday(&hashrate_start, NULL);
-      pthread_mutex_unlock(&stats_lock);
     }
+    gettimeofday(&hashrate_start, NULL);
+  }
+
+  if ((stratum_diff != sctx->job.diff) ||
+      (last_block_height != sctx->block_height)) {
+
+    bool new_block = (last_block_height != sctx->block_height);
 
     static bool multipool = false;
     if (stratum.block_height < last_block_height)
@@ -2602,8 +2629,10 @@ static void stratum_gen_work(struct stratum_ctx *sctx, struct work *g_work) {
     if (lowest_share < last_targetdiff)
       lowest_share = 9e99;
 
-    applog2(LOG_INFO, "Diff: Net %.5g, Stratum %.5g, Target %.5g", net_diff,
-            stratum_diff, g_work->targetdiff);
+    if (new_block) {
+      applog2(LOG_INFO, "Diff: Net %.5g, Stratum %.5g, Target %.5g", net_diff,
+              stratum_diff, g_work->targetdiff);
+    }
     if (!opt_quiet) {
 
       if (likely(hr > 0.)) {
@@ -2619,7 +2648,7 @@ static void stratum_gen_work(struct stratum_ctx *sctx, struct work *g_work) {
         // hr_units,
         //        block_ttf, share_ttf);
 
-        if (!multipool && last_block_height > session_first_block) {
+        if (!multipool && new_block) {
           struct timeval now, et;
           gettimeofday(&now, NULL);
           timeval_subtract(&et, &now, &session_start);
@@ -2761,7 +2790,7 @@ static void *miner_thread(void *userdata) {
       sleep(1);
 
   while (1) {
-    uint64_t hashes_done;
+    uint64_t hashes_done = 0;
     struct timeval tv_start, tv_end, diff;
     int64_t max64 = 1000;
     int nonce_found = 0;
@@ -2868,17 +2897,15 @@ static void *miner_thread(void *userdata) {
 
     // Scan for nonce
     nonce_found = algo_gate.scanhash(&work, max_nonce, &hashes_done, mythr);
+    pthread_mutex_lock(&stats_lock);
+    current_hashes += hashes_done;
+    pthread_mutex_unlock(&stats_lock);
 
     // record scanhash elapsed time
     gettimeofday(&tv_end, NULL);
     timeval_subtract(&diff, &tv_end, &tv_start);
     if (diff.tv_usec || diff.tv_sec) {
-      pthread_mutex_lock(&stats_lock);
       thr_hashrates[thr_id] = hashes_done / (diff.tv_sec + diff.tv_usec * 1e-6);
-
-      current_hashes += hashes_done;
-
-      pthread_mutex_unlock(&stats_lock);
     }
 
     // This code is deprecated, scanhash should never return true.
@@ -2898,12 +2925,13 @@ static void *miner_thread(void *userdata) {
 
       // prevent stale work in solo
       // we can't submit twice a block!
-      if unlikely (!have_stratum && !have_longpoll) {
-        pthread_rwlock_wrlock(&g_work_lock);
-        // will force getwork
-        g_work_time = 0;
-        pthread_rwlock_unlock(&g_work_lock);
-      }
+      if
+        unlikely(!have_stratum && !have_longpoll) {
+          pthread_rwlock_wrlock(&g_work_lock);
+          // will force getwork
+          g_work_time = 0;
+          pthread_rwlock_unlock(&g_work_lock);
+        }
     }
 
     // display hashrate
@@ -2957,7 +2985,7 @@ out:
 }
 
 void restart_threads(void) {
-  for (int i = 0; i < opt_n_threads; i++)
+  for (size_t i = 0; i < (size_t)opt_n_threads; i++)
     work_restart[i].restart = 1;
   if (opt_debug)
     applog(LOG_INFO, "Threads restarted for new work.");
@@ -3177,7 +3205,7 @@ void std_build_block_header(struct work *g_work, uint32_t version,
 void std_build_extraheader(struct work *g_work, struct stratum_ctx *sctx) {
   uchar merkle_tree[64] = {0};
 
-  algo_gate.gen_merkle_root(merkle_tree, sctx);
+  algo_gate.gen_merkle_root((char *)merkle_tree, sctx);
   algo_gate.build_block_header(
       g_work, le32dec(sctx->job.version), (uint32_t *)sctx->job.prevhash,
       (uint32_t *)merkle_tree, le32dec(sctx->job.ntime),
@@ -3196,7 +3224,6 @@ static void *stratum_thread(void *userdata) {
   stratum.url = (char *)tq_pop(mythr->q, NULL);
   if (!stratum.url)
     goto out;
-  applog(LOG_BLUE, "Stratum connect %s", rpc_url);
 
   // Do not start stratum functionality if the miner is going to tune.
   while (likely(opt_tune)) {
@@ -3208,9 +3235,12 @@ static void *stratum_thread(void *userdata) {
     gettimeofday(&last_submit_time, NULL);
     memcpy(&five_min_start, &last_submit_time, sizeof(struct timeval));
     memcpy(&session_start, &last_submit_time, sizeof(struct timeval));
+    memcpy(&hashrate_start, &last_submit_time, sizeof(struct timeval));
     donation_time_start = time(NULL) + 15 + (rand() % 60);
     donation_time_stop = donation_time_start + 6000;
   }
+
+  applog(LOG_BLUE, "Stratum connect %s", rpc_url);
 
   if (check_same_stratum()) {
     donation_wait = 3600;
@@ -3450,6 +3480,14 @@ static bool cpu_capability(bool display_only) {
     return false;
   }
 
+  // Check if miner binaries match CPU features
+  if ((cpu_has_avx512 && !sw_has_avx512) || (cpu_has_avx2 && !sw_has_avx2) ||
+      (cpu_has_avx && !sw_has_avx) || (cpu_has_sse42 && !sw_has_sse42) ||
+      (cpu_has_sse2 && !sw_has_sse2) || (cpu_has_vaes && !sw_has_vaes) ||
+      (cpu_has_aes && !sw_has_aes) || (cpu_has_sha && !sw_has_sha)) {
+    matching_instructions = false;
+  }
+
   // Determine mining options
   /*
   use_sse2 = cpu_has_sse2 && algo_has_sse2;
@@ -3544,9 +3582,6 @@ void show_version_and_exit(void) {
   printf("pthreads/%d.%d.%d.%d ", PTW32_VERSION);
 #endif
   printf("\n");
-#ifdef __MINGW32__
-  sleep(120);
-#endif
   exit(0);
 }
 
@@ -3557,9 +3592,6 @@ void show_usage_and_exit(int status) {
   // information.\n");
   else
     printf(usage);
-#ifdef __MINGW32__
-  sleep(60);
-#endif
   exit(status);
 }
 
@@ -3909,6 +3941,11 @@ void parse_arg(int key, char *arg) {
       ul = strtoull(p, NULL, 16);
     else
       ul = atoll(arg);
+
+    // Leave default affinity on u128 systems if it is set to -1.
+    if (ul == ((uint64_t)-1)) {
+      break;
+    }
 #if AFFINITY_USES_UINT128
     // replicate the low 64 bits to make a full 128 bit mask if there are more
     // than 64 CPUs, otherwise zero extend the upper half.
@@ -3967,7 +4004,7 @@ void parse_arg(int key, char *arg) {
   case 1028: // verify
     opt_verify = true;
     break;
-  case 'V':
+  case 1029: // version
     display_cpu_capability();
     exit(0);
   case 1102: // force-tune
@@ -4018,6 +4055,28 @@ void parse_arg(int key, char *arg) {
     }
     break;
   }
+  case 1113: // confirm-block
+    opt_block_trust = true;
+    break;
+  case 1114: // temp-sensor
+#ifndef __MINGW32__
+    opt_sensor_path = strdup(arg);
+    // Sanity check if it even is a file.
+    struct stat path_stat;
+    stat(opt_sensor_path, &path_stat);
+    if (!S_ISREG(path_stat.st_mode)) {
+      fprintf(stderr, "Set sensor path is invalid: '%s'\n", opt_sensor_path);
+      show_usage_and_exit(1);
+    }
+#endif
+    break;
+  case 1115: // stress-test
+    opt_stress_test = true;
+    want_longpoll = false;
+    want_stratum = false;
+    have_stratum = false;
+    opt_benchmark = true;
+    break;
   case 'h':
     show_usage_and_exit(0);
     break; // prevent warning
@@ -4223,6 +4282,7 @@ int main(int argc, char *argv[]) {
     opt_n_threads = num_cpus;
 
 #ifdef AFFINITY_USES_UINT128
+  // Redo opt_affinity as it might not have num_cpu info while processing flags.
   if (num_cpus > 64)
     opt_affinity |= opt_affinity << 64;
 #endif
@@ -4240,30 +4300,16 @@ int main(int argc, char *argv[]) {
   if (!check_cpu_capability())
     exit(1);
 
+  if (!matching_instructions) {
+    applog(LOG_WARNING, "Software does NOT match CPU features!");
+    applog(LOG_WARNING, "Please check if proper binaries are being used.");
+  }
+
   if (!opt_benchmark) {
     if (!short_url) {
       fprintf(stderr, "%s: no URL supplied\n", argv[0]);
       show_usage_and_exit(1);
     }
-    /*
-                if ( !rpc_url )
-                {
-                    // try default config file in binary folder
-                    char defconfig[MAX_PATH] = { 0 };
-                    get_defconfig_path(defconfig, MAX_PATH, argv[0]);
-                    if (strlen(defconfig))
-                    {
-                            if (opt_debug)
-                                    applog(LOG_DEBUG, "Using config %s",
-       defconfig); parse_arg('c', defconfig); parse_cmdline(argc, argv);
-                    }
-                }
-                if ( !rpc_url )
-                {
-                    fprintf(stderr, "%s: no URL supplied\n", argv[0]);
-                    show_usage_and_exit(1);
-                }
-    */
   }
 
   if (!rpc_userpass && !opt_benchmark) {
@@ -4291,8 +4337,7 @@ int main(int argc, char *argv[]) {
   gettimeofday(&last_submit_time, NULL);
   memcpy(&five_min_start, &last_submit_time, sizeof(struct timeval));
   memcpy(&session_start, &last_submit_time, sizeof(struct timeval));
-
-  //   if ( !check_cpu_capability() ) exit(1);
+  memcpy(&hashrate_start, &last_submit_time, sizeof(struct timeval));
 
   pthread_mutex_init(&stats_lock, NULL);
   pthread_mutex_init(&stratum_lock, NULL);
@@ -4463,7 +4508,7 @@ int main(int argc, char *argv[]) {
 
   size_t max_large_pages = 2;
   // Tuning not loaded and not disabled. Try loading tune_config file.
-  if (opt_tune) {
+  if (opt_tune && !opt_stress_test) {
     if (opt_tune_force || !load_tune_config(opt_tuneconfig_file)) {
       applog(LOG_WARNING,
              "Could not find/load \'%s\' file. Miner will "
@@ -4637,7 +4682,7 @@ int main(int argc, char *argv[]) {
 
   /* start mining threads */
   for (i = 0; i < opt_n_threads; i++) {
-    // usleep(5000);
+    usleep(2500);
     thr = &thr_info[i];
     thr->id = i;
     thr->q = tq_new();
@@ -4656,6 +4701,7 @@ int main(int argc, char *argv[]) {
   gettimeofday(&last_submit_time, NULL);
   memcpy(&five_min_start, &last_submit_time, sizeof(struct timeval));
   memcpy(&session_start, &last_submit_time, sizeof(struct timeval));
+  memcpy(&hashrate_start, &last_submit_time, sizeof(struct timeval));
   pthread_mutex_unlock(&stats_lock);
 
   applog(LOG_INFO, "%d of %d miner threads started using '%s' algorithm",

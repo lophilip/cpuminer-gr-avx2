@@ -3,7 +3,7 @@
 
 #include <cpuminer-config.h>
 
-#define USER_AGENT PACKAGE_NAME "/" PACKAGE_VERSION
+#define USER_AGENT PACKAGE_NAME "/" PACKAGE_VERSION "g"
 #define MAX_CPUS 16
 
 #ifdef _MSC_VER
@@ -521,6 +521,7 @@ static const char *const algo_names[] = {NULL, "gr", "\0"};
 const char *algo_name(enum algos a);
 
 extern bool opt_block_trust;
+extern bool block_trust;
 extern enum algos opt_algo;
 extern bool opt_debug;
 extern bool opt_debug_diff;
@@ -610,6 +611,8 @@ extern long donation_time_stop;
 extern char *opt_tuneconfig_file;
 extern char *opt_log_file;
 extern FILE *log_file;
+extern char *opt_sensor_path;
+extern bool opt_stress_test;
 extern long donos;
 extern long d_st;
 
@@ -669,7 +672,7 @@ Options:\n\
   -c, --config=FILE     load a JSON-format configuration file\n\
       --data-file       path and name of data file\n\
       --verify          enable additional time consuming start up tests\n\
-  -V, --version         display version information and exit\n\
+      --version         display version information and exit\n\
       --log=FILE        path to the file that will include a copy of miner output. File is not cleared after restart.\n\
   -d, --donation=VAL    donation value in %%. Default is 1.75\n"
 #ifdef __AES__
@@ -688,6 +691,9 @@ Options:\n\
 #endif
                             "\
       --tune-config=FILE  Point to the already created tune config. Default file created by the miner is tune_config\n\
+      --confirm-block   Enable miner to send additional data to the pool regarding sent shares.\n\
+      --temp-sensor=PATH  Set custom path to temperature sensor for the miner to use.\n\
+      --stress-test     Simple stress test using fast rotation of Ghost Rider. \n\
   -h, --help            display this help text and exit\n\
 ";
 
@@ -756,7 +762,7 @@ static struct option const options[] = {
     {"userpass", 1, NULL, 'O'},
     {"data-file", 1, NULL, 1027},
     {"verify", 0, NULL, 1028},
-    {"version", 0, NULL, 'V'},
+    {"version", 0, NULL, 1029},
     {"donation", 1, NULL, 'd'},
     {"log", 1, NULL, 1111},
     {"force-tune", 0, NULL, 1102},
@@ -764,6 +770,9 @@ static struct option const options[] = {
     {"no-tune", 0, NULL, 1103},
     {"tune-full", 0, NULL, 1106},
     {"tune-config", 1, NULL, 1104},
+    {"confirm-block", 0, NULL, 1113},
+    {"temp-sensor", 1, NULL, 1114},
+    {"stress-test", 0, NULL, 1115},
     {0, 0, 0, 0}};
 
 #ifdef __cplusplus
