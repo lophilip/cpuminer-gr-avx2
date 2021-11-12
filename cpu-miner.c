@@ -130,6 +130,12 @@ int opt_n_threads = 0;
 bool opt_sapling = false;
 bool opt_set_msr = true;
 bool opt_stress_test = false;
+<<<<<<< HEAD
+=======
+int opt_ecores = -1;
+bool opt_disabled_rots[20] = {false};
+bool is_intel_12th = false;
+>>>>>>> d2e391d29a0e9a42de2b85c25d51824b58554411
 bool matching_instructions = true;
 
 // Path to custom sensor location.
@@ -237,21 +243,23 @@ char *rpc_url_original = NULL;
 // Data about dev wallets.
 // idx 0 - Ausminer
 // idx 1 - Delgon
-const uint8_t max_idx = 8;
+const uint8_t max_idx = 9;
 uint8_t donation_url_idx[2] = {0, 0};
-char *donation_url_pattern[2][8] = {
-    {"flockpool", "flockpool", "flockpool", "p2pool", "r-pool", "suprnova",
-     "ausminers", "rplant"},
-    {"flockpool", "flockpool", "flockpool", "p2pool", "r-pool", "suprnova",
-     "ausminers", "rplant"}};
-char *donation_url[2][8] = {
+char *donation_url_pattern[2][9] = {
+    {"flockpool", "flockpool", "flockpool", "flockpool", "p2pool", "r-pool",
+     "suprnova", "ausminers", "rplant"},
+    {"flockpool", "flockpool", "flockpool", "flockpool", "p2pool", "r-pool",
+     "suprnova", "ausminers", "rplant"}};
+char *donation_url[2][9] = {
     {"stratum+tcp://eu.flockpool.com:4444",
+     "stratum+tcp://us-west.flockpool.com:4444",
      "stratum+tcp://us.flockpool.com:4444",
      "stratum+tcp://asia.flockpool.com:4444", "stratum+tcp://p2pool.co:3032",
      "stratum+tcp://r-pool.net:3032", "stratum+tcp://rtm.suprnova.cc:6273",
      "stratum+tcp://rtm.ausminers.com:3001",
      "stratum+tcp://stratum-eu.rplant.xyz:7056"},
     {"stratum+tcp://eu.flockpool.com:4444",
+     "stratum+tcp://us-west.flockpool.com:4444",
      "stratum+tcp://us.flockpool.com:4444",
      "stratum+tcp://asia.flockpool.com:4444", "stratum+tcp://p2pool.co:3032",
      "stratum+tcp://r-pool.net:3032", "stratum+tcp://rtm.suprnova.cc:6273",
@@ -268,7 +276,7 @@ const bool greedy=true;
 bool enable_donation = true &(~greedy);
 double donation_percent = 1.75;
 int dev_turn = 1;
-int turn_part = 3;
+int turn_part = 2;
 bool dev_mining = false;
 bool switched_stratum = false;
 
@@ -1068,11 +1076,11 @@ static struct timeval last_submit_time = {0};
 static inline int stats_ptr_incr(int p) { return ++p % s_stats_size; }
 
 static bool is_stale_share(struct work *work) {
+  pthread_mutex_lock(&stats_lock);
   if ((work->data[algo_gate.ntime_index] !=
        g_work.data[algo_gate.ntime_index]) ||
       stratum_problem || g_work_time == 0 || switching_sctx_data) {
     applog(LOG_WARNING, "Skip stale share.");
-    pthread_mutex_lock(&stats_lock);
     // Treat share as Stale.
     stale_share_count++;
     // Increment work pointer. Treat it as if you received a response.
@@ -1081,6 +1089,7 @@ static bool is_stale_share(struct work *work) {
     pthread_mutex_unlock(&stats_lock);
     return true;
   }
+  pthread_mutex_unlock(&stats_lock);
   return false;
 }
 
@@ -1370,7 +1379,7 @@ static bool uses_flock() {
 static void donation_switch() {
   long now = time(NULL);
   if (donation_time_start <= now) {
-    applog(LOG_BLUE, "Donation Start");
+    applog(LOG_BLUE, "Dev Fee Start");
     dev_mining = true;
     switching_sctx_data = true;
 
@@ -1413,7 +1422,7 @@ static void donation_switch() {
       dev_turn = (dev_turn + 1) % 2; // Rotate between devs.
     }
   } else if (donation_time_stop <= now) {
-    applog(LOG_BLUE, "Donation Stop");
+    applog(LOG_BLUE, "Dev Fee Stop");
     dev_mining = false;
     switching_sctx_data = true;
     donation_time_start = now + donation_wait - (donation_percent * 60);
@@ -1428,12 +1437,14 @@ static void donation_switch() {
     // Make sure to switch stratums after stratum donation switch.
     // Go back to original stratum if switched to backup in the meantime.
     // MAKE SURE rpc_url is matching user rpc and backup 100%.
-    if (switched_stratum || (url_backup && rpc_url_backup != NULL) ||
+    if (switched_stratum || // If switched stratum during donation.
+        (url_backup && rpc_url_backup != NULL) || // If switched to backup.
         !(strcmp(rpc_url, rpc_url_original) == 0 ||
           (rpc_url_backup != NULL && strcmp(rpc_url, rpc_url_backup) == 0))) {
       free(rpc_url);
       rpc_url = strdup(rpc_url_original);
       short_url = &rpc_url[sizeof("stratum+tcp://") - 1];
+      url_backup = false; // Went back to OG pool.
       stratum_check(true);
     }
     switched_stratum = false;
@@ -2747,7 +2758,7 @@ static void *miner_thread(void *userdata) {
     if ((opt_affinity == (uint128_t)(-1)) && opt_n_threads > 1) {
       affine_to_cpu_mask(thr_id, ((uint128_t)(1)) << (thr_id % num_cpus));
       if (opt_debug)
-        applog(LOG_INFO, "Binding thread %d to cpu %d. Mask 0x%llX %llX",
+        applog(LOG_INFO, "Binding thread %d to cpu %d. Mask 0x%016llX %016llX",
                thr_id, thr_id % num_cpus,
                u128_hi64((uint128_t)1 << (thr_id % num_cpus)),
                u128_lo64((uint128_t)1 << (thr_id % num_cpus)));
@@ -2756,7 +2767,7 @@ static void *miner_thread(void *userdata) {
     if ((opt_affinity == ((uint64_t)-1)) && (opt_n_threads > 1)) {
       affine_to_cpu_mask(thr_id, 1ULL << (thr_id % num_cpus));
       if (opt_debug)
-        applog(LOG_DEBUG, "Binding thread %d to cpu %d. Mask 0x%llX", thr_id,
+        applog(LOG_DEBUG, "Binding thread %d to cpu %d. Mask 0x%016llX", thr_id,
                thr_id % num_cpus, 1ULL << (thr_id % num_cpus));
     }
 #endif
@@ -2766,13 +2777,13 @@ static void *miner_thread(void *userdata) {
       if (opt_debug) {
 #if AFFINITY_USES_UINT128
         if (num_cpus > 64)
-          applog(LOG_INFO, "Binding thread %d to mask %016llx %016llx", thr_id,
+          applog(LOG_INFO, "Binding thread %d to mask %016llX %016llX", thr_id,
                  u128_hi64(opt_affinity), u128_lo64(opt_affinity));
         else
-          applog(LOG_INFO, "Binding thread %d to mask %016llx", thr_id,
+          applog(LOG_INFO, "Binding thread %d to mask %016llX", thr_id,
                  opt_affinity);
 #else
-        applog(LOG_INFO, "Binding thread %d to mask %016llx", thr_id,
+        applog(LOG_INFO, "Binding thread %d to mask %16llx", thr_id,
                opt_affinity);
 #endif
       }
@@ -3384,6 +3395,66 @@ static bool cpu_capability(bool display_only) {
         printf("\n");
 #endif
 
+  if (strstr(cpu_brand, "12900")) {
+    is_intel_12th = true;
+    if (opt_n_threads == 24) {
+      opt_ecores = (opt_ecores == -1) ? 8 : opt_ecores;
+      if (opt_debug) {
+        applog(LOG_DEBUG,
+               "Detected Intel 12900. Setting ecores to %d out of (8)",
+               opt_ecores);
+      }
+    } else {
+      applog2(LOG_WARNING,
+              "Detected Intel 12900 with unusual number of threads! Setting "
+              "ecores to 0 out of (8)",
+              opt_ecores);
+      opt_ecores = (opt_ecores == -1) ? 0 : opt_ecores;
+    }
+  } else if (strstr(cpu_brand, "12700")) {
+    is_intel_12th = true;
+    if (opt_n_threads == 20) {
+      opt_ecores = (opt_ecores == -1) ? 4 : opt_ecores;
+      if (opt_debug) {
+        applog2(LOG_DEBUG,
+                "Detected Intel 12700. Setting ecores to %d out of (4)",
+                opt_ecores);
+      }
+    } else {
+      opt_ecores = (opt_ecores == -1) ? 0 : opt_ecores;
+      applog2(LOG_WARNING,
+              "Detected Intel 12700 with unusual number of threads!  Setting "
+              "ecores "
+              "to 0 out of (4)",
+              opt_ecores);
+    }
+  } else if (strstr(cpu_brand, "12600")) {
+    is_intel_12th = true;
+    if (opt_n_threads == 16) {
+      opt_ecores = (opt_ecores == -1) ? 4 : opt_ecores;
+      if (opt_debug) {
+        applog2(LOG_DEBUG,
+                "Detected Intel 12600. Setting ecores to %d out of (4)",
+                opt_ecores);
+      }
+    } else {
+      opt_ecores = (opt_ecores == -1) ? 0 : opt_ecores;
+      applog2(LOG_WARNING,
+              "Detected Intel 12600 with unusual number of threads!  Setting "
+              "ecores "
+              "to 0 out of (4)",
+              opt_ecores);
+    }
+  }
+  // Detect if it is 12th Gen Intel.
+  if (strstr(cpu_brand, "12th")) {
+    is_intel_12th = true;
+    opt_ecores = (opt_ecores == -1) ? 0 : opt_ecores;
+    if (opt_debug) {
+      applog2(LOG_DEBUG, "Detected Intel 12th Gen.");
+    }
+  }
+
   printf("CPU features: ");
   if (cpu_has_avx512)
     printf(" AVX512");
@@ -3486,6 +3557,11 @@ static bool cpu_capability(bool display_only) {
       (cpu_has_sse2 && !sw_has_sse2) || (cpu_has_vaes && !sw_has_vaes) ||
       (cpu_has_aes && !sw_has_aes) || (cpu_has_sha && !sw_has_sha)) {
     matching_instructions = false;
+<<<<<<< HEAD
+=======
+    applog(LOG_WARNING, "Software does NOT match CPU features!");
+    applog(LOG_WARNING, "Please check if proper binaries are being used.");
+>>>>>>> d2e391d29a0e9a42de2b85c25d51824b58554411
   }
 
   // Determine mining options
@@ -3774,6 +3850,9 @@ void parse_arg(int key, char *arg) {
     v = atoi(arg);
     if (v < 0 || v > 9999) /* sanity check */
       show_usage_and_exit(1);
+    if (v == 0) {
+      break;
+    }
     opt_n_threads = v;
     break;
   case 'u': // user
@@ -4077,6 +4156,26 @@ void parse_arg(int key, char *arg) {
     have_stratum = false;
     opt_benchmark = true;
     break;
+  case 1116: // ecores
+    d = atoi(arg);
+    opt_ecores = d;
+    break;
+  case 1117: // disable-rot
+      ;
+    // arg - list like 1,5,19
+    char *dis_rot = strtok(arg, ",");
+    while (dis_rot != NULL) {
+      v = atoi(dis_rot);
+      // Only allow values from 0 - 20
+      if (v < 1 || v > 20) {
+        fprintf(stderr, "Allowed rotations from 1 - 20\n");
+        show_usage_and_exit(1);
+      }
+      printf("Disabling %d\n", v);
+      opt_disabled_rots[v - 1] = true;
+      dis_rot = strtok(NULL, ",");
+    }
+    break;
   case 'h':
     show_usage_and_exit(0);
     break; // prevent warning
@@ -4204,6 +4303,7 @@ int main(int argc, char *argv[]) {
   long flags;
   int i, err;
 
+<<<<<<< HEAD
   pthread_mutex_init(&applog_lock, NULL);
   pthread_cond_init(&sync_cond, NULL);
 
@@ -4240,6 +4340,8 @@ int main(int argc, char *argv[]) {
 
 
 
+=======
+>>>>>>> d2e391d29a0e9a42de2b85c25d51824b58554411
 #if defined(__MINGW32__)
 //	SYSTEM_INFO sysinfo;
 //	GetSystemInfo(&sysinfo);
@@ -4251,14 +4353,15 @@ int main(int argc, char *argv[]) {
   num_cpus = 0;
   num_cpugroups = GetActiveProcessorGroupCount();
   if (num_cpugroups > 1) {
-    applog(LOG_INFO, "Detected %d Processor Groups.", num_cpugroups);
+    fprintf(stderr, "Detected %d Processor Groups.\n", num_cpugroups);
   }
   for (i = 0; i < num_cpugroups; i++) {
     int cpus = GetActiveProcessorCount(i);
     num_cpus += cpus;
 
-    if (opt_debug || i > 0)
-      applog(LOG_DEBUG, "Found %d cpus on cpu group %d", cpus, i);
+    if (num_cpugroups > 1) {
+      fprintf(stderr, "Found %d cpus on cpu group %d\n", cpus, i);
+    }
   }
 #else
   SYSTEM_INFO sysinfo;
@@ -4281,6 +4384,112 @@ int main(int argc, char *argv[]) {
   if (!opt_n_threads)
     opt_n_threads = num_cpus;
 
+  pthread_mutex_init(&applog_lock, NULL);
+  pthread_cond_init(&sync_cond, NULL);
+
+  rpc_user = strdup("");
+  rpc_pass = strdup("");
+  opt_tuneconfig_file = strdup("tune_config");
+
+  show_credits();
+  opt_algo = ALGO_GR;
+
+  unsigned long now = time(NULL);
+  srand(now);
+  // Get the time with random start
+  parse_cmdline(argc, argv);
+
+  donation_time_start = now + 15 + (rand() % 30);
+  donation_time_stop = donation_time_start + 6000;
+  // Switch off donations if it is not using GR Algo
+  if (opt_algo != ALGO_GR) {
+    enable_donation = false;
+  } else if (!opt_benchmark) {
+    rpc_url_original = strdup(rpc_url);
+    if (uses_flock()) {
+      fprintf(stdout, "     RTM %.2lf%% Fee\n\n", donation_percent - 0.25);
+    } else {
+      fprintf(stdout, "     RTM %.2lf%% Fee\n\n", donation_percent);
+    }
+  }
+
+  if (!register_algo_gate(opt_algo, &algo_gate))
+    exit(1);
+
+  if (!check_cpu_capability())
+    exit(1);
+
+  if (is_intel_12th) {
+    applog(LOG_INFO, "Detected 12th Gen Intel.");
+  }
+  if (opt_ecores != -1) {
+    applog(LOG_NOTICE, CL_WHT CL_GRN "Setting E cores number to %u" CL_WHT,
+           opt_ecores);
+    if (!is_intel_12th) {
+      applog(LOG_WARNING, "Miner did not detect 12th Gen Intel. Make sure it "
+                          "is if you want to use ecores option.");
+    }
+  }
+
+  // Check if proper tcp / tcps was selected and replace if needed.
+  if (!opt_benchmark) {
+    if (strstr(rpc_url_original, "flockpool")) {
+      bool uses_ssl = (strstr(rpc_url_original, ":5555") != NULL);
+      bool has_ssl_set = (strstr(rpc_url_original, "stratum+tcps://") != NULL);
+      char *tmp =
+          (char *)malloc(strlen(rpc_url_original) +
+                         (strstr(rpc_url_original, "://") == NULL ? 15 : 1));
+      if (uses_ssl && !has_ssl_set) {
+        applog(LOG_WARNING,
+               "Detected SSL port but TCP protocol in primary URL.");
+        applog(LOG_WARNING, "Changing to stratum+tcps to support SSL.");
+        sprintf(tmp, "stratum+tcps://%s", strstr(rpc_url_original, "://") + 3);
+      } else if (!uses_ssl && has_ssl_set) {
+        applog(LOG_WARNING,
+               "Detected TCP port but SSL protocol in primary URL.");
+        applog(LOG_WARNING, "Changing to stratum+tcp to support TCP.");
+        sprintf(tmp, "stratum+tcp://%s", strstr(rpc_url_original, "://") + 3);
+      } else {
+        sprintf(tmp, "%s", rpc_url);
+      }
+      free(rpc_url);
+      free(rpc_url_original);
+      rpc_url = strdup(tmp);
+      rpc_url_original = strdup(tmp);
+      free(tmp);
+      if (opt_debug) {
+        applog(LOG_DEBUG, "rpc: %s", rpc_url);
+        applog(LOG_DEBUG, "rpc_orig: %s", rpc_url_original);
+      }
+    }
+    if (rpc_url_backup != NULL && strstr(rpc_url_backup, "flockpool")) {
+      bool uses_ssl = (strstr(rpc_url_backup, ":5555") != NULL);
+      bool has_ssl_set = (strstr(rpc_url_backup, "stratum+tcps://") != NULL);
+      char *tmp =
+          (char *)malloc(strlen(rpc_url_backup) +
+                         (strstr(rpc_url_backup, "://") == NULL ? 15 : 1));
+      if (uses_ssl && !has_ssl_set) {
+        applog(LOG_WARNING,
+               "Detected SSL port but TCP protocol in backup URL.");
+        applog(LOG_WARNING, "Changing to stratum+tcps to support SSL.");
+        sprintf(tmp, "stratum+tcps://%s", strstr(rpc_url_backup, "://") + 3);
+      } else if (!uses_ssl && has_ssl_set) {
+        applog(LOG_WARNING,
+               "Detected TCP port but SSL protocol in backup URL.");
+        applog(LOG_WARNING, "Changing to stratum+tcp to support TCP.");
+        sprintf(tmp, "stratum+tcp://%s", strstr(rpc_url_backup, "://") + 3);
+      } else {
+        sprintf(tmp, "%s", rpc_url_backup);
+      }
+      free(rpc_url_backup);
+      rpc_url_backup = strdup(tmp);
+      free(tmp);
+      if (opt_debug) {
+        applog(LOG_DEBUG, "rpc_bck: %s", rpc_url_backup);
+      }
+    }
+  }
+
 #ifdef AFFINITY_USES_UINT128
   // Redo opt_affinity as it might not have num_cpu info while processing flags.
   if (num_cpus > 64)
@@ -4297,8 +4506,13 @@ int main(int argc, char *argv[]) {
   if (!register_algo_gate(opt_algo, &algo_gate))
     exit(1);
 
-  if (!check_cpu_capability())
-    exit(1);
+  // if (!check_cpu_capability())
+  //  exit(1);
+
+  // if (!matching_instructions) {
+  //  applog(LOG_WARNING, "Software does NOT match CPU features!");
+  //  applog(LOG_WARNING, "Please check if proper binaries are being used.");
+  //}
 
   if (!matching_instructions) {
     applog(LOG_WARNING, "Software does NOT match CPU features!");
@@ -4534,6 +4748,7 @@ int main(int argc, char *argv[]) {
       if (opt_tune_full) {
         applog(LOG_WARNING,
                "Ignoring tune-full flag. Only available on AVX2 capable CPUs.");
+        opt_tune_full = false;
       }
       uint32_t tune_def_time = (((640 + 40) * 6) / 60) + 2;
       applog(LOG_WARNING, "Tuning process takes ~%d minutes to finish.",
@@ -4570,7 +4785,7 @@ int main(int argc, char *argv[]) {
 #ifdef __AES__
   // Prepare and set MSR.
   if (opt_set_msr) {
-    int ret = enable_msr(opt_n_threads);
+    int ret = enable_msr(num_cpus);
     if (ret == 0) {
       applog(LOG_NOTICE, CL_WHT CL_GRN "MSR set up successfully." CL_WHT);
     } else if (ret == 1) {

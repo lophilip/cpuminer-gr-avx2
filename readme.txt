@@ -82,6 +82,8 @@ Options:
       --confirm-block   Enable miner to send additional data to the pool regarding sent shares.
       --temp-sensor=PATH  Set custom path to temperature sensor for the miner to use.
       --stress-test     Simple stress test using fast rotation of Ghost Rider. 
+      --ecores=N        Specify exact number of E cores on Alder Lake CPU. Defaults to autodetect that can be inaccurate.
+      --disable-rot=LIST  Comma (,) separated number of rotations (3,10,16) to be skipped and not mined. For testing purposes.
   -h, --help            display this help text and exit
 
 
@@ -90,7 +92,7 @@ Correct binaries should be selected automaticaly from the provided .sh/.bat scri
 
 # Compiled as AMD Zen1 AVX2 SHA
 # AMD Zen & Zen+ - 1000 & 2000 series (3000 Mobile)
-cpuminer-zen"
+cpuminer-zen
 
 # Compiled as AMD Zen2 AVX2 SHA
 # AMD Zen2 - 3000 (Desktop) & 4000 series
@@ -99,6 +101,9 @@ cpuminer-zen2
 # Compiled as AMD Zen3 AVX2 SHA VAES
 # AMD Zen3 - 5000 series
 cpuminer-zen3
+
+# Alder Lake (12th gen, 12000 series) E cores limit to avx2 instead of avx512+
+cpuminer-avx2-sha-vaes
 
 # Compiled as Icelake AVX512 SHA VAES
 # Ice Lake (10th gen, 10000 series Mobile)
@@ -134,10 +139,10 @@ cpuminer-avx
 cpuminer-aes-sse42
 
 # Compiled as Nehalem SSE4.2
-cpuminer-sse42"
+cpuminer-sse42
 
 # Compiled as Core2 SSSE3
-cpuminer-ssse3"
+cpuminer-ssse3
 
 # Compiled as Generic SSE2
 cpuminer-sse2
