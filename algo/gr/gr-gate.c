@@ -286,16 +286,71 @@ void select_tuned_config(int thr_id) {
 // be also present on other nodes
 // Taking into consideration AMD cpus and their CCX structure we should take
 // threads from front and back in turns.
-bool is_thread_used(int thr_id) {
-  size_t config_id = get_config_id();
-  for (int i = 0; i < thread_tune[config_id]; i += 2) {
-    if (thr_id == i) {
+// 12th Gen Intel.
+// Take into consideration E cores. Those are disabled FIRST and added in
+// pattern of 1 core per 4 core cluster each time 1st opt_n_threads - 1
+bool is_thread_used(size_t thr_id) {
+  const size_t disabled_threads = thread_tune[get_config_id()];
+  const size_t ecores = (opt_ecores == -1) ? 0 : opt_ecores;
+  const size_t ecores_clusters = ecores / 4;
+
+  // Default behaviour of only disabling threads from multithreaded cores.
+  if (disabled_threads >= ecores) {
+    for (size_t i = 0; i < disabled_threads - ecores; i += 2) {
+      if (thr_id == i) {
+        return false;
+      }
+    }
+    for (size_t i = 1; i < disabled_threads - ecores; i += 2) {
+      // In case of present E cores, first Xc/2Xt are assumed to be cores with
+      // HT / SMT
+      if (thr_id == opt_n_threads - ecores - i) {
+        return false;
+      }
+    }
+    // Make sure all E cores are "disabled".
+    if (thr_id >= opt_n_threads - ecores) {
       return false;
     }
-  }
-  for (int i = 1; i < thread_tune[config_id]; i += 2) {
-    if (thr_id == opt_n_threads - i) {
-      return false;
+  } else {
+    // Make sure all E cores are "disabled".
+    if (thr_id < opt_n_threads - ecores) {
+      return true;
+    }
+
+    // That means E cores should be re-enabled.
+    const size_t ecores_offset = opt_n_threads - ecores;
+    size_t ecores_used = ecores - disabled_threads;
+    // There should be only clusters of 4 E cores.
+    if (ecores % 4 == 0) {
+      // This value is > 0
+      const uint8_t cores_to_use[4] = {0, 2, 1, 3};
+      for (size_t idx = 0; idx < 4; ++idx) {
+        for (size_t cluster = 0; cluster < ecores_clusters; cluster++) {
+          if (thr_id == ecores_offset + (cores_to_use[idx] + (cluster * 4))) {
+            return true;
+          } else if (--ecores_used == 0) {
+            return false;
+          }
+        }
+      }
+    } else {
+      // Some unknown number of E cores? Try to treat it like normal ones
+      // and disable enable every other thread.
+      for (size_t c = 0; c < ecores; c += 2) {
+        if (thr_id == ecores_offset + c) {
+          return true;
+        } else if (--ecores_used == 0) {
+          return false;
+        }
+      }
+      for (size_t c = 1; c < ecores; c += 2) {
+        if (thr_id == ecores_offset + c) {
+          return true;
+        } else if (--ecores_used == 0) {
+          return false;
+        }
+      }
     }
   }
 
@@ -304,13 +359,26 @@ bool is_thread_used(int thr_id) {
 
 static size_t get_used_thread_count() {
   size_t used = 0;
-  for (int i = 0; i < opt_n_threads; ++i) {
+  if (opt_debug) {
+    printf("                      Used threads map: [");
+  }
+  for (size_t i = 0; i < (size_t)opt_n_threads; ++i) {
     if (is_thread_used(i)) {
       used++;
+      if (opt_debug) {
+        printf("!");
+      }
+    } else if (opt_debug) {
+      printf(".");
     }
+  }
+  if (opt_debug) {
+    printf("]\n");
   }
   return used;
 }
+
+inline bool is_rot_disabled() { return opt_disabled_rots[get_config_id() / 2]; }
 
 static double bench_time = 0.0;
 static double bench_hashes = 0.0;
@@ -377,6 +445,7 @@ static void sync_lock(const int locks) {
     pthread_cond_broadcast(&sync_cond);
   }
   pthread_mutex_unlock(&stats_lock);
+  usleep(10000);
 }
 
 static void sync_conf() { sync_lock(opt_n_threads); }
@@ -400,28 +469,40 @@ void *statistic_thread(void *arg) {
   sync_bench(); // Sync before benchmark starts.
   sync_bench(); // Rotation change sync.
   while (true) {
-    for (int i = 0; i < 3; ++i) {
-      usleep(sleep_time);
-      sub_rotation = (sub_rotation + 1) % 3;
-    }
-
     gr_hash_order[5] = cn[rotation][0] + 15;
     gr_hash_order[11] = cn[rotation][1] + 15;
     gr_hash_order[17] = cn[rotation][2] + 15;
+    // Do not wait for hashing threads if rotation is disabled.
+    if (arg_used || (!arg_used && !is_rot_disabled())) {
+      for (int i = 0; i < 3; ++i) {
+        usleep(sleep_time);
+        sub_rotation = (sub_rotation + 1) % 3;
+      }
+    } else {
+      usleep(100000);
+    }
+
     double tested_threads = (double)get_used_thread_count();
     // Change rotation.
     rotation = (rotation + 1) % 40;
 
     sync_bench(); // Rotation change sync.
-    // Update global hashrate for API.
-    global_hashrate = bench_hashes / bench_time;
+    if (!arg_used && is_rot_disabled()) {
+      global_hashrate = 0;
 
-    bench_hashrate_true += bench_hashes / bench_time * tested_threads;
-    bench_hashrate_all += bench_hashes / bench_time *
-                          time_ratio[(rotation + 39) % 40] / 2.0 *
-                          tested_threads;
-    bench_hashes /= tested_threads;
-    bench_time /= tested_threads;
+      bench_hashes = 0;
+      bench_time = sleep_time * 3.0;
+    } else {
+      // Update global hashrate for API.
+      global_hashrate = bench_hashes / bench_time;
+
+      bench_hashrate_true += bench_hashes / bench_time * tested_threads;
+      bench_hashrate_all += bench_hashes / bench_time *
+                            time_ratio[(rotation + 39) % 40] / 2.0 *
+                            tested_threads;
+      bench_hashes /= tested_threads;
+      bench_time /= tested_threads;
+    }
 
     char prefix[256] = {0};
     sprintf(prefix,
@@ -660,14 +741,22 @@ void tune(void *input, int thr_id) {
 
   // Allocate full memory for now.
   if (opt_tune_full) {
+#ifdef GR_4WAY
     cn_tune[0][5] = 2;
+#else
+    // Make sure it stays at 2 pages max on nonAVX2 CPUs.
+    cn_tune[0][5] = 1;
+#endif
   } else {
     cn_tune[0][5] = 1;
   }
   AllocateNeededMemory(true);
-  cn_tune[0][5] = 0;
 
   for (int i = 0; i < 40; i++) {
+    sync_conf();
+    if (i == 0) {
+      cn_tune[0][5] = 0;
+    }
     thread_tune[i] = 0;
     double best_hashrate = 0;
     tuning_rotation = i;
@@ -720,6 +809,18 @@ void tune(void *input, int thr_id) {
         }
         curr_test++;
 
+        sync_conf();
+        // Do NOT use E cores of 12th Gen Intel while tuning.
+        // Tey will be tested if adding them is beneficial!
+        // Try to always use at least one core per E cores cluster.
+        if (opt_ecores > (opt_ecores / 4)) {
+          thread_tune[i] = opt_ecores - (opt_ecores / 4);
+        } else if (opt_ecores > 0) {
+          thread_tune[i] = opt_ecores;
+        } else {
+          thread_tune[i] = 0;
+        }
+
         cn_config[variant[0]] = config[0];
         cn_config[variant[1]] = config[1];
         cn_config[variant[2]] = config[2];
@@ -753,15 +854,87 @@ void tune(void *input, int thr_id) {
              cn_tune[i][2], cn_tune[i][3], cn_tune[i][4], cn_tune[i][5],
              opt_n_threads - thread_tune[i], best_hashrate);
     }
+    uint8_t variant[3] = {cn_map[cn[i][0]], cn_map[cn[i][1]], cn_map[cn[i][2]]};
+
+    size_t disabled_threads;
+    if (opt_ecores > (opt_ecores / 4)) {
+      disabled_threads = opt_ecores - (opt_ecores / 4);
+    } else if (opt_ecores > 0) {
+      disabled_threads = opt_ecores;
+    } else {
+      disabled_threads = 0;
+    }
+    static volatile bool stop_thread_tune = false;
+    static size_t final_disabled_threads = 0;
+    stop_thread_tune = false;
+    final_disabled_threads = 0;
+
+    // Try to add E cores back. It is possible it is beneficial on faster
+    // rotations like 3, 4, 10, 16.
+    if (opt_ecores > 0) {
+      final_disabled_threads = opt_ecores - (opt_ecores / 4);
+      do {
+        sync_conf();
+        bench_hashrate = 0;
+        bench_time = 0;
+        bench_hashes = 0;
+        // We know that opt_ecores is > 0 so we can divide and compare.
+        if (disabled_threads >= ((uint32_t)opt_ecores / 4)) {
+          disabled_threads -= opt_ecores / 4;
+        } else {
+          disabled_threads--;
+        }
+        thread_tune[i] = disabled_threads;
+
+        memcpy(cn_config, cn_tune[i], 6);
+        prefetch_l1 = prefetch_tune[i];
+
+        if (thr_id == 0) {
+          applog(LOG_INFO, "Testing: %s (%s) + %s (%s) + %s (%s) - %d threads",
+                 variant_name(cn[i][0]), variant_way(cn_config[variant[0]]),
+                 variant_name(cn[i][1]), variant_way(cn_config[variant[1]]),
+                 variant_name(cn[i][2]), variant_way(cn_config[variant[2]]),
+                 opt_n_threads - thread_tune[i]);
+        }
+        sync_conf();
+        tune_config(input, thr_id, i);
+        sync_conf();
+        if (thr_id == 0) {
+          if (best_hashrate < bench_hashrate) {
+            best_hashrate = bench_hashrate;
+            final_disabled_threads = disabled_threads;
+          } else {
+            // If current thread config is not better, further search is not
+            // necessary and can be skipped.
+            stop_thread_tune = true;
+          }
+          bench_hashrate = 0;
+          bench_time = 0;
+          bench_hashes = 0;
+        }
+        sync_conf();
+      } while (disabled_threads >= 1 && !stop_thread_tune);
+    }
+    sync_conf();
 
     // Finished tuning using all threads for current config.
     // Test if it is benefitial to use less threads.
-    static volatile bool stop_thread_tune = false;
     stop_thread_tune = false;
-    size_t disabled_threads = 0;
+    disabled_threads = 0;
+    // By default all E cores should be disabled.
+    // This should allow for all E cores to not be used and start reducing
+    // number of P threads in "standard" manner of 1t per core.
+    if (opt_ecores > 0) {
+      // That way all ecores will be disabled and we will start benchmarking
+      // with all P coreas and reduce amount of threads one by one.
+      disabled_threads = opt_ecores + 1;
+    }
     sync_conf();
     while (!stop_thread_tune && thread_tune[i] < opt_n_threads - 1) {
       sync_conf();
+      bench_hashrate = 0;
+      bench_time = 0;
+      bench_hashes = 0;
 
       disabled_threads++;
       thread_tune[i] = disabled_threads;
@@ -771,9 +944,9 @@ void tune(void *input, int thr_id) {
 
       if (thr_id == 0) {
         applog(LOG_INFO, "Testing: %s (%s) + %s (%s) + %s (%s) - %d threads",
-               variant_name(cn[i][0]), variant_way(config[0]),
-               variant_name(cn[i][1]), variant_way(config[1]),
-               variant_name(cn[i][2]), variant_way(config[2]),
+               variant_name(cn[i][0]), variant_way(cn_config[variant[0]]),
+               variant_name(cn[i][1]), variant_way(cn_config[variant[1]]),
+               variant_name(cn[i][2]), variant_way(cn_config[variant[2]]),
                opt_n_threads - thread_tune[i]);
       }
       sync_conf();
@@ -782,6 +955,7 @@ void tune(void *input, int thr_id) {
       if (thr_id == 0) {
         if (best_hashrate < bench_hashrate) {
           best_hashrate = bench_hashrate;
+          final_disabled_threads = disabled_threads;
         } else {
           // If current thread config is not better, further search is not
           // necessary and can be skipped.
@@ -794,12 +968,7 @@ void tune(void *input, int thr_id) {
       sync_conf();
     }
 
-    // Increase it after last attemt as it did not give better results.
-    // It is possible that 1 thread is still the best so do not increase in
-    // that case.
-    if (stop_thread_tune) {
-      thread_tune[i] = disabled_threads - 1;
-    }
+    thread_tune[i] = final_disabled_threads;
 
     if (thr_id == 0) {
       applog(
@@ -878,6 +1047,7 @@ void benchmark(void *input, int thr_id, long sleep_time) {
   gettimeofday(&start, NULL);
   while (true) {
     if (unlikely(local_rotation != rotation)) {
+      gettimeofday(&end, NULL);
       // Change first part of the hash to get different core rotation.
       for (int i = 1; i < 5 + 1; ++i) {
         edata0[i] = rand();
@@ -888,7 +1058,6 @@ void benchmark(void *input, int thr_id, long sleep_time) {
       gr_hash_order[11] = cn[rotation][1] + 15;
       gr_hash_order[17] = cn[rotation][2] + 15;
 
-      gettimeofday(&end, NULL);
       timeval_subtract(&diff, &end, &start);
       double elapsed = (double)diff.tv_sec + (double)diff.tv_usec / 1e6;
       if (thread_used) {
@@ -896,9 +1065,12 @@ void benchmark(void *input, int thr_id, long sleep_time) {
         bench_hashes += hashes_done;
         bench_time += elapsed;
         pthread_mutex_unlock(&stats_lock);
+        // Update thread hashrate for API.
+        thr_hashrates[thr_id] = hashes_done / elapsed;
+      } else {
+        // Update thread hashrate for API.
+        thr_hashrates[thr_id] = 0.0;
       }
-      // Update thread hashrate for API.
-      thr_hashrates[thr_id] = hashes_done / elapsed;
 
       hashes_done = 0.0;
       if (opt_tuned) {
@@ -921,7 +1093,7 @@ void benchmark(void *input, int thr_id, long sleep_time) {
       if (!is_thread_used(thr_id)) {
         thread_used = false;
         while (local_rotation == rotation) {
-          usleep(100000);
+          usleep(25000);
         }
         continue;
       } else {

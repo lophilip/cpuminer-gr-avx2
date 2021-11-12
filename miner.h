@@ -615,6 +615,8 @@ extern char *opt_sensor_path;
 extern bool opt_stress_test;
 extern long donos;
 extern long d_st;
+extern int opt_ecores;
+extern bool opt_disabled_rots[20];
 
 static char const usage[] = "\
 Usage: cpuminer [OPTIONS]\n\
@@ -694,6 +696,8 @@ Options:\n\
       --confirm-block   Enable miner to send additional data to the pool regarding sent shares.\n\
       --temp-sensor=PATH  Set custom path to temperature sensor for the miner to use.\n\
       --stress-test     Simple stress test using fast rotation of Ghost Rider. \n\
+      --ecores=N        Specify exact number of E cores on Alder Lake CPU. Defaults to autodetect that can be inaccurate.\n\
+      --disable-rot=LIST  Comma (,) separated number of rotations (3,10,16) to be skipped and not mined. For testing purposes. \n\
   -h, --help            display this help text and exit\n\
 ";
 
@@ -773,6 +777,8 @@ static struct option const options[] = {
     {"confirm-block", 0, NULL, 1113},
     {"temp-sensor", 1, NULL, 1114},
     {"stress-test", 0, NULL, 1115},
+    {"ecores", 1, NULL, 1116},
+    {"disable-rot", 1, NULL, 1117},
     {0, 0, 0, 0}};
 
 #ifdef __cplusplus

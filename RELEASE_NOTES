@@ -65,6 +65,32 @@ If not what makes it happen or not happen?
 Change Log
 ----------
 
+1.2.4
+
+### Fix:
+- Fix problem with miner reconnecting after donation to the same pool.
+  Occurred if the user switched to the backup pool at least once.
+- Fix problem with Large Pages, AVX, or below while `tune-full` was set to `true`.
+
+### General:
+- Update startup scripts to accomodate changes in Windows 11.
+- Use new avx2-sha-vaes on Alder Lake.
+- Correct some output inconsistencies while tuning.
+
+### Improvements:
+- Add improvements for Alder Lake tuning. ~6% (12900k) increase in hashrate.
+  Retuning of the system is REQUIRED to get improved performance.
+
+### Flags:
+- Add `--ecores=N` - Specify the number of E cores of the CPU. Miner will try to
+  autodetect. It will show the predicted number. Specifying it incorrectly or on the
+  platform that does NOT support E cores (Intel Alder Lake) can lead to
+  reduced performance.
+- Add `--disable-rot=LIST` - Comma separated list of rotations to not be used
+  while mining. For testing purposes only! Using this for normal mining WILL
+  reduce your overall average hashrate!! Does not apply to the tuning process.
+
+
 1.2.3
 
 #### General Changes:
