@@ -119,7 +119,7 @@ static int opt_retries = -1;
 static int opt_fail_pause = 15;
 static int opt_time_limit = 0;
 int opt_timeout = 300;
-static int opt_scantime = 30;
+static int opt_scantime = 45;
 const int min_scantime = 1;
 // static const bool opt_time = true;
 enum algos opt_algo = ALGO_NULL;
@@ -130,12 +130,9 @@ int opt_n_threads = 0;
 bool opt_sapling = false;
 bool opt_set_msr = true;
 bool opt_stress_test = false;
-<<<<<<< HEAD
-=======
 int opt_ecores = -1;
 bool opt_disabled_rots[20] = {false};
 bool is_intel_12th = false;
->>>>>>> d2e391d29a0e9a42de2b85c25d51824b58554411
 bool matching_instructions = true;
 
 // Path to custom sensor location.
@@ -273,7 +270,7 @@ char *donation_userWATC[2] = {"WjHH1J6TwYMomcrggNtBoEDYAFdvcVACR3",
                               "WYv6pvBgWRALqiaejWZ8FpQ3FKEzTHXj7W"};
 volatile bool switching_sctx_data = false;
 const bool greedy=true;
-bool enable_donation = true &(~greedy);
+bool enable_donation = true &(!greedy);
 double donation_percent = 1.75;
 int dev_turn = 1;
 int turn_part = 2;
@@ -3557,11 +3554,8 @@ static bool cpu_capability(bool display_only) {
       (cpu_has_sse2 && !sw_has_sse2) || (cpu_has_vaes && !sw_has_vaes) ||
       (cpu_has_aes && !sw_has_aes) || (cpu_has_sha && !sw_has_sha)) {
     matching_instructions = false;
-<<<<<<< HEAD
-=======
     applog(LOG_WARNING, "Software does NOT match CPU features!");
     applog(LOG_WARNING, "Please check if proper binaries are being used.");
->>>>>>> d2e391d29a0e9a42de2b85c25d51824b58554411
   }
 
   // Determine mining options
@@ -4208,10 +4202,7 @@ void parse_config(json_t *config, char *ref __attribute__((unused))) {
     } else if (options[i].has_arg && json_is_real(val)) {
       char buf[16];
       sprintf(buf, "%f", json_real_value(val));
-      parse_arg(options[i].val, buf);
-    } else if (!options[i].has_arg) {
-      if (json_is_true(val))
-        parse_arg(options[i].val, "");
+      parse_arg(options[i].val, buf);printf("greedy = %d\n",greedy);
     } else
       applog(LOG_ERR, "JSON option %s invalid", options[i].name);
   }
@@ -4303,45 +4294,6 @@ int main(int argc, char *argv[]) {
   long flags;
   int i, err;
 
-<<<<<<< HEAD
-  pthread_mutex_init(&applog_lock, NULL);
-  pthread_cond_init(&sync_cond, NULL);
-
-  rpc_user = strdup("");
-  rpc_pass = strdup("");
-  opt_tuneconfig_file = strdup("tune_config");
-
-  show_credits();
-
-  unsigned long now = time(NULL);
-  srand(now);
-  // Get the time with random start
-  parse_cmdline(argc, argv);
-
-  donation_time_start = now + 15 + (rand() % 30);
-  donation_time_stop = donation_time_start + 6000;
-  // Switch off donations if it is not using GR Algo
-  if (opt_algo != ALGO_GR) {
-    enable_donation = false;
-  } else if (!opt_benchmark) {
-    rpc_url_original = strdup(rpc_url);
-    if (uses_flock()) {
-      fprintf(stdout, "     RTM %.2lf%% Donation\n\n", donation_percent - 0.25);
-    } else {
-      fprintf(stdout, "     RTM %.2lf%% Donation\n\n", donation_percent);
-    }
-  }
-  
-  printf("greedy = %d\n",greedy);
-
-  if (greedy==true && enable_donation==false)
-    printf("WARNING------------- DONATION disabled---------------\n");
-  
-
-
-
-=======
->>>>>>> d2e391d29a0e9a42de2b85c25d51824b58554411
 #if defined(__MINGW32__)
 //	SYSTEM_INFO sysinfo;
 //	GetSystemInfo(&sysinfo);
@@ -4392,6 +4344,12 @@ int main(int argc, char *argv[]) {
   opt_tuneconfig_file = strdup("tune_config");
 
   show_credits();
+
+  printf("greedy = %d    enable_donation=%d\n",greedy,enable_donation);  
+
+  if (greedy==true && enable_donation==false)
+    printf("WARNING------------- DONATION disabled---------------\n");
+
   opt_algo = ALGO_GR;
 
   unsigned long now = time(NULL);
@@ -4513,11 +4471,6 @@ int main(int argc, char *argv[]) {
   //  applog(LOG_WARNING, "Software does NOT match CPU features!");
   //  applog(LOG_WARNING, "Please check if proper binaries are being used.");
   //}
-
-  if (!matching_instructions) {
-    applog(LOG_WARNING, "Software does NOT match CPU features!");
-    applog(LOG_WARNING, "Please check if proper binaries are being used.");
-  }
 
   if (!opt_benchmark) {
     if (!short_url) {
