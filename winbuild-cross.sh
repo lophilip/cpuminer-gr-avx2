@@ -13,7 +13,9 @@ export LOCAL_LIB="$HOME/usr/lib"
 export CONFIGURE_ARGS="--with-curl=$LOCAL_LIB/curl --with-crypto=$LOCAL_LIB/openssl --host=x86_64-w64-mingw32"
 export MINGW_LIB="/usr/x86_64-w64-mingw32/lib"
 # set correct gcc version
-export GCC_MINGW_LIB="/usr/lib/gcc/x86_64-w64-mingw32/10-win32"
+if -z "$GCC_MINGW_LIB"; then
+  export GCC_MINGW_LIB="/usr/lib/gcc/x86_64-w64-mingw32/10-win32"
+fi
 # used by GCC
 export LDFLAGS="-L$LOCAL_LIB/curl/lib/.libs -L$LOCAL_LIB/gmp/.libs -L$LOCAL_LIB/openssl"
 
@@ -29,6 +31,41 @@ ln -s $LOCAL_LIB/gmp/gmp.h ./gmp.h
 rm -rf bin/win/ 2>/dev/null
 mkdir -p bin/win/ 2>/dev/null
 
+file=$MINGW_LIB/zlib1.dll
+if ! test -f $file; then
+  echo "$file does not exist"
+  exit 1
+fi
+
+file=$MINGW_LIB/libwinpthread-1.dll
+if ! test -f $file; then
+  echo "$file does not exist"
+  exit 1
+fi
+
+file=$GCC_MINGW_LIB/libstdc++-6.dll
+if ! test -f $file; then
+  echo "$file does not exist"
+  exit 1
+fi
+
+file=$GCC_MINGW_LIB/libgcc_s_seh-1.dll
+if ! test -f $file; then
+  echo "$file does not exist"
+  exit 1
+fi
+
+file=$LOCAL_LIB/openssl/libcrypto-1_1-x64.dll
+if ! test -f $file; then
+  echo "$file does not exist"
+  exit 1
+fi
+
+file=$LOCAL_LIB/curl/lib/.libs/libcurl-4.dll
+if ! test -f $file; then
+  echo "$file does not exist"
+  exit 1
+fi
 
 cp $MINGW_LIB/zlib1.dll bin/win/
 cp $MINGW_LIB/libwinpthread-1.dll bin/win/
